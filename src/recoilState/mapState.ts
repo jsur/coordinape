@@ -13,13 +13,13 @@ import {
 import { getAvatarPathWithFallback } from 'utils/domain';
 import { toSearchRegExp, assertDef } from 'utils/tools';
 
+import { rGiftsByEpoch } from './allocationState';
 import {
-  rGiftsByEpoch,
   rSelectedCircleId,
   rCircleEpochsStatus,
   rUsersMap,
   rGiftsMap,
-  rCircles,
+  rCirclesMap,
 } from './appState';
 
 import {
@@ -34,8 +34,7 @@ import {
   IMapNodeFG,
   MetricEnum,
   TScaler,
-  IFilledProfile,
-  IProfileEmbed,
+  IProfile,
   IUser,
 } from 'types';
 
@@ -51,13 +50,15 @@ import {
 // TODO: Think about how best to resolve this sort of thing.
 const FAKE_ID_OFFSET = 100000;
 const FAKE_ADDRESS = '0xFAKE';
-const createFakeProfile = (u: IUser): IProfileEmbed => ({
+export const createFakeProfile = (u: IUser): IProfile => ({
   id: u.id + FAKE_ID_OFFSET,
   address: u.address,
   admin_view: 0,
+  hasAdminView: false,
   avatar: '',
   created_at: u.created_at,
   updated_at: u.updated_at,
+  users: [],
 });
 const createFakeUser = (circleId: number): IUser => ({
   name: 'HardDelete',
@@ -84,6 +85,9 @@ const createFakeUser = (circleId: number): IUser => ({
     created_at: '2021-07-07T23:29:18.000000Z',
     updated_at: '2021-07-07T23:29:18.000000Z',
   },
+  isCircleAdmin: false,
+  isCoordinapeUser: false,
+  teammates: [],
 });
 
 export const rUserMapWithFakes = selector<Map<number, IUser>>({
@@ -91,7 +95,7 @@ export const rUserMapWithFakes = selector<Map<number, IUser>>({
   get: ({ get }: IRecoilGetParams) => {
     const usersMap = get(rUsersMap);
     const updated = new Map(usersMap);
-    get(rCircles)
+    iti(get(rCirclesMap).values())
       .map(c => createFakeUser(c.id))
       .forEach(u => updated.set(u.id, u));
 
@@ -99,7 +103,7 @@ export const rUserMapWithFakes = selector<Map<number, IUser>>({
   },
 });
 
-export const rUserProfileMap = selector<Map<string, IFilledProfile>>({
+export const rUserProfileMap = selector<Map<string, IProfile>>({
   key: 'rUserProfileMap',
   get: ({ get }: IRecoilGetParams) =>
     iti(get(rUserMapWithFakes).values())
@@ -113,7 +117,7 @@ export const rUserProfileMap = selector<Map<string, IFilledProfile>>({
         return {
           ...profile,
           users,
-        } as IFilledProfile;
+        } as IProfile;
       })
       .toMap(p => p.address),
 });
@@ -426,7 +430,7 @@ export const rMapBag = selector<Set<string>>({
 });
 
 // Results are the active profiles in the bag
-export const rMapResults = selector<IFilledProfile[]>({
+export const rMapResults = selector<IProfile[]>({
   key: 'rMapResults',
   get: async ({ get }: IRecoilGetParams) => {
     const profileMap = get(rUserProfileMap);

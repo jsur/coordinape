@@ -11,7 +11,7 @@ import {
   AvatarUpload,
 } from 'components';
 import EditProfileForm from 'forms/EditProfileForm';
-import { useApi } from 'hooks';
+import { useApiWithProfile } from 'hooks';
 import { useMyProfile } from 'recoilState';
 
 const useStyles = makeStyles(theme => ({
@@ -51,11 +51,7 @@ export const EditProfileModal = ({
   const classes = useStyles();
 
   const myProfile = useMyProfile();
-  const { updateMyProfile, updateAvatar } = useApi();
-
-  if (!myProfile) {
-    return <></>;
-  }
+  const { updateMyProfile, updateAvatar } = useApiWithProfile();
 
   return (
     <EditProfileForm.FormController

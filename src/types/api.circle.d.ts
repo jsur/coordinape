@@ -32,4 +32,5 @@ export interface ICircle extends IApiCircle {
   teamSelText: string;
   allocText: string;
   vouchingText: string;
+  hasVouching: boolean;
 }

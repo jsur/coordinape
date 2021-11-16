@@ -5,7 +5,7 @@ import { ethers } from 'ethers';
 import { makeStyles } from '@material-ui/core';
 
 import { FormModal, ApeTextField } from 'components';
-import { useVouching } from 'hooks';
+import { useApiWithSelectedCircle } from 'hooks';
 import { useSelectedCircle } from 'recoilState';
 
 const useStyles = makeStyles(theme => ({
@@ -37,8 +37,8 @@ export const NewNominationModal = ({
   onClose: () => void;
 }) => {
   const classes = useStyles();
-  const circle = useSelectedCircle();
-  const { nominateUser } = useVouching();
+  const { circle } = useSelectedCircle();
+  const { nominateUser } = useApiWithSelectedCircle();
 
   const [name, setName] = useState<string>('');
   const [address, setAddress] = useState<string>('');

@@ -1,11 +1,11 @@
 import React from 'react';
 
 import { useHistory } from 'react-router-dom';
-import { useRecoilValue } from 'recoil';
+import { useRecoilValueLoadable } from 'recoil';
 
 import { makeStyles, Button } from '@material-ui/core';
 
-import { rMyAddress, rSelectedCircle } from 'recoilState';
+import { rSelectedCircleState, useMyAddress } from 'recoilState';
 import { getNavigationFooter } from 'routes/paths';
 import * as paths from 'routes/paths';
 import { shortenAddress } from 'utils';
@@ -130,38 +130,40 @@ export const DefaultPage = () => {
   const classes = useStyles();
   const history = useHistory();
 
-  const selectedCircle = useRecoilValue(rSelectedCircle);
-  const myAddress = useRecoilValue(rMyAddress);
+  const selectedCircleState = useRecoilValueLoadable(rSelectedCircleState);
+  const myAddress = useMyAddress();
 
   return (
     <div className={classes.root}>
       {myAddress ? (
         <div className={classes.header}>
-          <p className={classes.title}>
-            {!selectedCircle
-              ? 'Welcome!'
-              : `Welcome to ${selectedCircle.name}!`}
-          </p>
-          {!selectedCircle && (
-            <div className={classes.welcomeSection}>
-              <p className={classes.welcomeText}>
-                This wallet isn&apos;t associated with a circle.
+          {selectedCircleState.state === 'hasValue' ? (
+            <>
+              <p className={classes.title}>
+                Welcome to {selectedCircleState.contents.circle.name}!
               </p>
-              <p className={classes.welcomeText}>
-                If you are supposed to be part of a circle already, contact your
-                circle&apos;s admin to make sure they added this address:{' '}
-                {shortenAddress(myAddress)}
-              </p>
-              <p className={classes.welcomeText}>Or, create a new circle.</p>
-              <Button
-                variant="contained"
-                color="primary"
-                onClick={() => history.push(paths.getCreateCirclePath())}
-                className={classes.startCircle}
-              >
-                Start a Circle
-              </Button>
-            </div>
+              <div className={classes.welcomeSection}>
+                <p className={classes.welcomeText}>
+                  This wallet isn&apos;t associated with a circle.
+                </p>
+                <p className={classes.welcomeText}>
+                  If you are supposed to be part of a circle already, contact
+                  your circle&apos;s admin to make sure they added this address:{' '}
+                  {shortenAddress(myAddress)}
+                </p>
+                <p className={classes.welcomeText}>Or, create a new circle.</p>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={() => history.push(paths.getCreateCirclePath())}
+                  className={classes.startCircle}
+                >
+                  Start a Circle
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className={classes.title}>Welcome!</p>
           )}
         </div>
       ) : (

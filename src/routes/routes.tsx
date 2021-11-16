@@ -1,9 +1,7 @@
 import React, { lazy } from 'react';
 
 import { Redirect, Route, Switch } from 'react-router-dom';
-import { useRecoilValue } from 'recoil';
 
-import { USER_ROLE_ADMIN } from 'config/constants';
 import AdminPage from 'pages/AdminPage';
 import AllocationPage from 'pages/AllocationPage';
 import CreateCirclePage from 'pages/CreateCirclePage';
@@ -13,7 +11,7 @@ import OverviewPage from 'pages/OverviewPage';
 import ProfilePage from 'pages/ProfilePage';
 import VaultsPage from 'pages/VaultsPage';
 import VouchingPage from 'pages/VouchingPage';
-import { rSelectedMyUser, rSelectedCircle, rHasAdminView } from 'recoilState';
+import { useMyProfile, useSelectedCircleLoadable } from 'recoilState';
 
 import * as paths from './paths';
 
@@ -23,11 +21,10 @@ import * as paths from './paths';
 const LazyAssetMapPage = lazy(() => import('pages/AssetMapPage'));
 
 export const Routes = () => {
-  const selectedMyUser = useRecoilValue(rSelectedMyUser);
-  const selectedCircle = useRecoilValue(rSelectedCircle);
-  const hasAdminView = useRecoilValue(rHasAdminView);
+  const { hasAdminView } = useMyProfile();
+  const selectedLoadable = useSelectedCircleLoadable();
 
-  if (!selectedCircle || (!selectedMyUser && !hasAdminView)) {
+  if (selectedLoadable.state !== 'hasValue') {
     return (
       <Switch>
         <Route exact path={paths.getHomePath()} component={DefaultPage} />
@@ -40,8 +37,8 @@ export const Routes = () => {
       </Switch>
     );
   }
-
-  const canViewAdmin = selectedMyUser?.role === USER_ROLE_ADMIN || hasAdminView;
+  const selectedUser = selectedLoadable.contents.myUser;
+  const canViewAdmin = selectedUser.isCircleAdmin || hasAdminView;
 
   return (
     <Switch>
@@ -89,7 +86,7 @@ export const Routes = () => {
         component={CreateCirclePage}
       />
 
-      {selectedMyUser && [
+      {selectedUser && [
         <Route
           exact
           key={paths.getAllocationPath()}

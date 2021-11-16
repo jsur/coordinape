@@ -1,44 +1,71 @@
 // at 5k elements for filter-map-slice itiriri is more performant
 import iti from 'itiriri';
-import moment from 'moment';
+import { DateTime } from 'luxon';
 import {
   atom,
-  atomFamily,
   selector,
   selectorFamily,
   useRecoilValue,
-  useRecoilState,
-  useSetRecoilState,
+  RecoilValueReadOnly,
+  useRecoilValueLoadable,
 } from 'recoil';
 
-import { mergeSelfIdProfileInfo } from '../utils/selfIdHelpers';
 import { getApiService } from 'services/api';
-import {
-  createCircleWithDefaults,
-  createGiftWithUser,
-  createExtendedEpoch,
-} from 'utils/modelExtenders';
+import { extraProfile } from 'utils/modelExtenders';
+import { getSelfIdProfile } from 'utils/selfIdHelpers';
 import storage from 'utils/storage';
+import { neverEndingPromise } from 'utils/tools';
 
-import { rMyAddress } from './walletState';
+import { rManifest, rFullCircle } from './dbState';
 
 import {
   IUser,
-  IMyUsers,
-  IApiFilledProfile,
-  IApiProfile,
+  IMyUser,
   IEpoch,
   ICircle,
-  IRecoilGetParams,
-  ITokenGift,
-  IApiTokenGift,
-  IApiEpoch,
-  ISelfIdProfile,
+  INominee,
+  IProfile,
+  IAuth,
 } from 'types';
 
-export const rSelectedCircleId = atom<number | undefined>({
-  key: 'rSelectedCircleId',
-  default: storage.getCircleId(),
+export const rWalletAuth = atom({
+  key: 'rWalletAuth',
+  default: selector({
+    key: 'rWalletAuth/default',
+    get: () => {
+      const auth = storage.getAuth();
+      updateApiService(auth);
+      return auth;
+    },
+  }),
+  effects_UNSTABLE: [
+    ({ onSet }) => {
+      onSet(auth => {
+        updateApiService(auth);
+        storage.setAuth(auth);
+      });
+    },
+  ],
+});
+
+const updateApiService = ({ address, authTokens }: IAuth) => {
+  getApiService().setAuth(address ? authTokens[address] : undefined);
+};
+
+// myAddress is how the app knows that there is a logged in state.
+export const rMyAddress = selector({
+  key: 'rMyAddress',
+  get: async ({ get }) => {
+    const { address, authTokens } = get(rWalletAuth);
+    return address && address in authTokens
+      ? address
+      : neverEndingPromise<string>();
+  },
+});
+
+export const rSelectedCircleIdSource = atom<number>({
+  key: 'rSelectedCircleIdSource',
+  default: storage.getCircleId() ?? -1,
   effects_UNSTABLE: [
     ({ onSet }) => {
       onSet(newId => {
@@ -51,303 +78,179 @@ export const rSelectedCircleId = atom<number | undefined>({
     },
   ],
 });
-export const useSelectedCircleId = () => useRecoilValue(rSelectedCircleId);
-export const useSetSelectedCircleId = () =>
-  useSetRecoilState(rSelectedCircleId);
 
-// This toggles team only features
-export const rTriggerMode = atom<boolean>({
-  key: 'rTriggerMode',
-  default: false,
+// Suspend unless it has a value.
+export const rSelectedCircleId = selector({
+  key: 'rSelectedCircleId',
+  get: async ({ get }) => {
+    const id = get(rSelectedCircleIdSource);
+    return id === -1 ? neverEndingPromise<number>() : id;
+  },
 });
-export const useTriggerMode = () => useRecoilValue(rTriggerMode);
-export const useStateTriggerMode = () => useRecoilState(rTriggerMode);
-export const useSetTriggerMode = () => useSetRecoilState(rTriggerMode);
 
-export const rInitialized = atom<boolean>({
-  key: 'rInitialized',
-  default: false,
-});
-export const useInitialized = () => useRecoilValue(rInitialized);
-export const useStateInitialized = () => useRecoilState(rInitialized);
-export const useSetInitialized = () => useSetRecoilState(rInitialized);
+/*
+ *
+ * Base DB Selectors
+ *
+ * TODO: These could just as well be replaced with direct references to
+ * rManifest and rFullCircle
+ ***************/
 
-export const rMyProfileStaleSignal = atom<number>({
-  key: 'rMyProfileStaleSignal',
-  default: 0,
-});
-export const useTriggerProfileReload = () => {
-  const [myProfileStaleSignal, setMyProfileStaleSignal] = useRecoilState(
-    rMyProfileStaleSignal
-  );
-  return () => setMyProfileStaleSignal(myProfileStaleSignal + 1);
-};
-
-export const rMyProfile = selector<IApiFilledProfile | undefined>({
+export const rMyProfile = selector({
   key: 'rMyProfile',
-  get: async ({ get }: IRecoilGetParams) => {
-    get(rMyProfileStaleSignal);
-    const myAddress = get(rMyAddress);
-    return myAddress ? await getApiService().getProfile(myAddress) : undefined;
-  },
+  get: async ({ get }) => get(rManifest).myProfile,
 });
-export const useMyProfile = () => useRecoilValue(rMyProfile);
 
-export const rHasAdminView = selector<boolean>({
-  key: 'rHasAdminView',
-  get: ({ get }: IRecoilGetParams) => {
-    const profile = get(rMyProfile);
-    return !!profile?.admin_view;
-  },
+export const rCirclesMap = selector({
+  key: 'rCirclesMap',
+  get: async ({ get }) => iti(get(rManifest).circles).toMap(c => c.id),
 });
-export const useHasAdminView = () => useRecoilValue(rHasAdminView);
 
-export const rMyUsers = selector<IMyUsers[]>({
-  key: 'rMyUsers',
-  get: ({ get }: IRecoilGetParams) => {
-    const profile = get(rMyProfile);
-    if (!profile?.users) {
-      return [];
-    }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { users, ...userFillProfile } = profile;
-    return (
-      profile.users.map(
-        u => ({ ...u, profile: userFillProfile as IApiProfile } as IMyUsers)
-      ) ?? []
-    );
+export const rEpochsMap = selector({
+  key: 'rEpochsMap',
+  get: async ({ get }) => {
+    const result = iti(get(rManifest).epochs).toMap(e => e.id);
+    iti(get(rFullCircle).epochsMap.values()).forEach(e => result.set(e.id, e));
+    return result;
   },
 });
 
-export const rMyCircleUser = selectorFamily<IMyUsers | undefined, number>({
-  key: 'rMyCircleUser',
+export const rNomineesMap = selector({
+  key: 'rNomineesMap',
+  get: async ({ get }) => get(rFullCircle).nomineesMap,
+});
+
+export const rUsersMap = selector({
+  key: 'rUsersMap',
+  get: async ({ get }) => {
+    const result = iti(
+      get(rManifest).myProfile.myUsers as unknown as IUser[]
+    ).toMap(u => u.id);
+    iti(get(rFullCircle).usersMap.values()).forEach(u => result.set(u.id, u));
+    return result;
+  },
+});
+
+export const rPastGiftsMap = selector({
+  key: 'rPastGiftsMap',
+  get: async ({ get }) => get(rFullCircle).pastGiftsMap,
+});
+
+export const rPendingGiftsMap = selector({
+  key: 'rPendingGiftsMap',
+  get: async ({ get }) => get(rFullCircle).pendingGiftsMap,
+});
+
+export const rGiftsMap = selector({
+  key: 'rGiftsMap',
+  get: async ({ get }) => get(rFullCircle).giftsMap,
+});
+
+export const rProfile = selectorFamily({
+  key: 'rProfile',
+  get: (address: string) => async () => {
+    const [profile, selfIdProfile] = await Promise.all([
+      getApiService().getProfile(address),
+      getSelfIdProfile(address),
+    ]);
+
+    return {
+      ...selfIdProfile,
+      ...extraProfile(profile),
+    } as IProfile;
+  },
+});
+
+/*
+ *
+ * Joining Base State Selectors
+ *
+ ***************/
+export const rCirclesState = selector({
+  key: 'rCirclesState',
+  get: ({ get }) => {
+    const circleMap = get(rCirclesMap);
+    const allCircles = Array.from(circleMap.values());
+    const myCircles = iti(get(rMyProfile).myUsers)
+      .map(u => circleMap.get(u.circle_id))
+      .filter(c => c !== undefined) as unknown as ICircle[]; // Brittle
+    const myCirclesSet = new Set(myCircles.map(c => c.id));
+    const viewOnlyCircles = allCircles.filter(c => !myCirclesSet.has(c.id));
+
+    return {
+      myCircles,
+      allCircles,
+      viewOnlyCircles,
+    };
+  },
+});
+
+export const rCircleState = selectorFamily<ICircleState, number>({
+  key: 'rCircleState',
   get:
     (circleId: number) =>
-    ({ get }: IRecoilGetParams) =>
-      get(rMyUsers).find(u => u.circle_id === circleId),
-});
-export const useMyCircleUser = (circleId: number) =>
-  useRecoilValue(rMyCircleUser(circleId));
-
-export const rSelectedMyUser = selector<IMyUsers | undefined>({
-  key: 'rSelectedMyUser',
-  get: async ({ get }: IRecoilGetParams) => {
-    const selectedCircleId = get(rSelectedCircleId);
-    return selectedCircleId ? get(rMyCircleUser(selectedCircleId)) : undefined;
-  },
-});
-export const useSelectedMyUser = () => useRecoilValue(rSelectedMyUser);
-
-export const rMyCircles = selector<ICircle[]>({
-  key: 'rMyCircles',
-  get: ({ get }: IRecoilGetParams) => {
-    const myProfile = get(rMyProfile);
-    return (myProfile?.users ?? [])
-      .map(u => createCircleWithDefaults(u.circle))
-      .sort((a, b) => a.protocol_id - b.protocol_id);
-  },
-});
-export const useMyCircles = () => useRecoilValue(rMyCircles);
-
-export const rMyAdminCircles = selector<ICircle[]>({
-  key: 'rMyAdminCircles',
-  get: ({ get }: IRecoilGetParams) => {
-    const myProfile = get(rMyProfile);
-    return (myProfile?.users ?? [])
-      .filter(u => u.role === 1)
-      .map(u => createCircleWithDefaults(u.circle));
-  },
-});
-export const useMyAdminCircles = () => useRecoilValue(rMyCircles);
-
-export const rFetchedAt = atomFamily<Map<string, number>, string>({
-  key: 'rFetchedAt',
-  default: new Map(),
-});
-
-export const rSelfIdProfiles = atom<Map<string, ISelfIdProfile>>({
-  key: 'rSelfIdProfiles',
-  default: new Map(),
-});
-
-export const rProfileRaw = atom<Map<string, IApiFilledProfile>>({
-  key: 'rProfileRaw',
-  default: new Map(),
-});
-
-export const rCirclesMap = atom<Map<number, ICircle>>({
-  key: 'rCirclesMap',
-  default: new Promise(resolve => {
-    getApiService()
-      .getCircles()
-      .then(circles =>
-        resolve(
-          new Map(
-            circles.map(c => createCircleWithDefaults(c)).map(c => [c.id, c])
-          )
-        )
+    ({ get }) => {
+      const circle = get(rCirclesMap).get(circleId);
+      const hasAdminView = get(rHasAdminView);
+      const circleUsersAll = iti(get(rUsersMap).values()).filter(
+        u => u.circle_id === circleId
       );
-  }),
-});
+      const circleUsers = circleUsersAll.filter(u => !u.deleted_at);
+      const myUser = get(rMyProfile).myUsers.find(
+        u => u.circle_id === circleId
+      );
+      const circleEpochsStatus = get(rCircleEpochsStatus(circleId));
+      const activeNominees = iti(get(rCircleNominees(circleId)))
+        .filter(n => !n.ended && !n.expired && n.vouchesNeeded > 0)
+        .toArray();
 
-export const rCircles = selector<ICircle[]>({
-  key: 'rCircles',
-  get: ({ get }: IRecoilGetParams) => Array.from(get(rCirclesMap).values()),
-});
+      const firstUser = circleUsers.first();
 
-export const rEpochsRaw = atom<Map<number, IApiEpoch>>({
-  key: 'rEpochsRaw',
-  default: new Promise(resolve => {
-    getApiService()
-      .getFutureEpochs()
-      .then(epochs => resolve(new Map(epochs.map(e => [e.id, e]))));
-  }),
-});
+      const impersonate = !myUser && hasAdminView;
+      const meOrPretend =
+        myUser ?? impersonate
+          ? ({
+              ...firstUser,
+              circle: circle,
+              teammates: circleUsers
+                .filter(u => u.id !== firstUser?.id)
+                .toArray(),
+            } as IMyUser)
+          : undefined;
 
-export const rEpochsMap = selector<Map<number, IEpoch>>({
-  key: 'rEpochsMap',
-  get: ({ get }: IRecoilGetParams) => {
-    const giftsByEpoch = get(rGiftsByEpoch);
-    return iti(get(rEpochsRaw).values())
-      .map(e => createExtendedEpoch(e, giftsByEpoch.get(e.id) ?? []))
-      .toMap(e => e.id);
-  },
-});
+      if (meOrPretend === undefined || circle === undefined) {
+        return neverEndingPromise();
+      }
 
-export const rEpochs = selector<IEpoch[]>({
-  key: 'rEpochs',
-  get: ({ get }: IRecoilGetParams) => Array.from(get(rEpochsMap).values()),
-});
-
-export const rUsersMapRaw = atom<Map<number, IUser>>({
-  key: 'rUsersMapRaw',
-  default: new Map(),
-});
-
-export const rUsersMap = selector<Map<number, IUser>>({
-  key: 'rUsersMap',
-  get: async ({ get }: IRecoilGetParams) => {
-    const usersMapRaw = new Map(get(rUsersMapRaw));
-    const selfIdProfiles = get(rSelfIdProfiles);
-    // Profile may have updated fields missing from last we queried users.
-    const profileMap = get(rProfileRaw);
-
-    iti(usersMapRaw.values()).forEach(u => {
-      const existingProfile = profileMap.get(u.address);
-      usersMapRaw.set(u.id, {
-        ...u,
-        // TODO: In the future, profile being defined should be invariant
-        // However the server has returned undefined here.
-        profile: u.profile
-          ? mergeSelfIdProfileInfo(
-              existingProfile
-                ? {
-                    ...u.profile,
-                    ...existingProfile,
-                  }
-                : u.profile,
-              selfIdProfiles.get(u.address)
-            )
-          : undefined,
-      });
-    });
-    return usersMapRaw;
-  },
-});
-export const useUsersMap = () => useRecoilValue(rUsersMap);
-
-export const rUsers = selector<IUser[]>({
-  key: 'rUsers',
-  get: ({ get }: IRecoilGetParams) => Array.from(get(rUsersMap).values()),
-});
-
-export const rPastGiftsRaw = atom<Map<number, IApiTokenGift>>({
-  key: 'rPastGiftsRaw',
-  default: new Map(),
-});
-
-export const rPastGiftsMap = selector<Map<number, ITokenGift>>({
-  key: 'rPastGiftsMap',
-  get: ({ get }: IRecoilGetParams) => {
-    const userMap = get(rUsersMap);
-    return iti(get(rPastGiftsRaw).values())
-      .map(g => createGiftWithUser(g, userMap))
-      .toMap(g => g.id);
-  },
-});
-
-export const rPendingGiftsRaw = atom<Map<number, IApiTokenGift>>({
-  key: 'rPendingGiftsRaw',
-  default: new Map(),
-});
-
-export const rPendingGiftsMap = selector<Map<number, ITokenGift>>({
-  key: 'rPendingGiftsMap',
-  get: ({ get }: IRecoilGetParams) => {
-    const userMap = get(rUsersMap);
-    return iti(get(rPendingGiftsRaw).values())
-      .map(g => createGiftWithUser(g, userMap))
-      .toMap(g => g.id);
-  },
-});
-
-export const rPendingGifts = selector<ITokenGift[]>({
-  key: 'rPendingGifts',
-  get: ({ get }: IRecoilGetParams) =>
-    iti(get(rPendingGiftsMap).values())
-      .sort(({ id: a }, { id: b }) => a - b)
-      .toArray(),
-});
-
-export const rGiftsMap = selector<Map<number, ITokenGift>>({
-  key: 'rGiftsMap',
-  get: ({ get }: IRecoilGetParams) =>
-    iti(get(rPendingGiftsMap).values())
-      // TODO: ensure this can't happen
-      // https://linear.app/yearn/issue/APE-220/research-ways-of-keeping-types-in-sync-better-between-server-and
-      // This is crazy, but pending gifts are their own table - Bug city!
-      .map(g => ({ ...g, id: g.id + 100000 } as ITokenGift))
-      .concat(get(rPastGiftsMap).values())
-      .toMap(g => g.id),
-});
-
-export const rGifts = selector<ITokenGift[]>({
-  key: 'rGifts',
-  get: ({ get }: IRecoilGetParams) =>
-    Array.from(get(rGiftsMap).values()).sort(({ id: a }, { id: b }) => a - b),
-});
-
-export const rGiftsByEpoch = selector<Map<number, ITokenGift[]>>({
-  key: 'rGiftsByEpoch',
-  get: ({ get }: IRecoilGetParams) =>
-    iti(get(rGifts)).toGroups(g => g.epoch_id),
-});
-
-export const rPendingGiftsFor = selectorFamily<ITokenGift[], number>({
-  key: 'rPendingGiftsFor',
-  get:
-    (userId: number) =>
-    ({ get }: IRecoilGetParams) => {
-      const pendingGifts = get(rPendingGifts);
-      return pendingGifts.filter(g => g.recipient_id === userId);
+      return {
+        circleId,
+        circle,
+        myUser: meOrPretend,
+        impersonate,
+        users: circleUsers.toArray(),
+        usersNotMe: circleUsers.filter(u => u.id !== meOrPretend?.id).toArray(),
+        usersWithDeleted: circleUsersAll.toArray(),
+        circleEpochsStatus,
+        activeNominees,
+      };
     },
 });
 
-export const rPendingGiftsFrom = selectorFamily<ITokenGift[], number>({
-  key: 'rPendingGiftsFrom',
-  get:
-    (userId: number) =>
-    ({ get }: IRecoilGetParams) => {
-      const pendingGifts = get(rPendingGifts);
-      return pendingGifts.filter(g => g.sender_id === userId);
-    },
+export const rSelectedCircleState = selector({
+  key: 'rSelectedCircleState',
+  get: ({ get }) => get(rCircleState(get(rSelectedCircleId))),
+});
+
+export const rHasAdminView = selector({
+  key: 'rHasAdminView',
+  get: ({ get }) => !!get(rMyProfile)?.admin_view,
 });
 
 export const rCircleEpochs = selectorFamily<IEpoch[], number>({
   key: 'rCircleEpochs',
   get:
     (circleId: number) =>
-    ({ get }: IRecoilGetParams) => {
+    ({ get }) => {
       let lastNumber = 1;
       const epochsWithNumber = [] as IEpoch[];
       iti(get(rEpochsMap).values())
@@ -361,27 +264,12 @@ export const rCircleEpochs = selectorFamily<IEpoch[], number>({
       return epochsWithNumber;
     },
 });
-export const useCircleEpochs = (id: number) =>
-  useRecoilValue(rCircleEpochs(id));
-export const useSelectedCircleEpochs = () =>
-  useRecoilValue(rCircleEpochs(useSelectedCircleId() ?? -1));
 
-export const rCircleEpochsStatus = selectorFamily<
-  {
-    epochs: IEpoch[];
-    pastEpochs: IEpoch[];
-    previousEpoch?: IEpoch;
-    currentEpoch?: IEpoch;
-    nextEpoch?: IEpoch;
-    futureEpochs: IEpoch[];
-    previousEpochEndedOn?: string;
-  },
-  number
->({
+export const rCircleEpochsStatus = selectorFamily({
   key: 'rCircleEpochsStatus',
   get:
     (circleId: number) =>
-    ({ get }: IRecoilGetParams) => {
+    ({ get }) => {
       const epochs = get(rCircleEpochs(circleId));
       const pastEpochs = epochs.filter(
         epoch => +new Date(epoch.end_date) - +new Date() <= 0
@@ -392,18 +280,37 @@ export const rCircleEpochsStatus = selectorFamily<
       const previousEpoch =
         pastEpochs.length > 0 ? pastEpochs[pastEpochs.length - 1] : undefined;
       const nextEpoch = futureEpochs.length > 0 ? futureEpochs[0] : undefined;
-      const previousEpochEndedOn = previousEpoch
-        ? moment
-            .utc(previousEpoch.end_date)
-            .subtract(1, 'seconds')
-            .local()
-            .format('dddd MMMM Do')
-        : undefined;
+      const previousEpochEndedOn =
+        previousEpoch &&
+        previousEpoch.endDate
+          .minus({ seconds: 1 })
+          .toLocal()
+          .toLocaleString(DateTime.DATE_MED);
+
       const currentEpoch = epochs.find(
         epoch =>
           +new Date(epoch.start_date) - +new Date() <= 0 &&
           +new Date(epoch.end_date) - +new Date() >= 0
       );
+
+      const closest = currentEpoch ?? nextEpoch;
+      const currentEpochNumber = currentEpoch?.number
+        ? String(currentEpoch.number)
+        : previousEpoch?.number
+        ? String(previousEpoch.number + 1)
+        : '1';
+      let timingMessage = 'Epoch not Scheduled';
+      let longTimingMessage = 'Next Epoch not Scheduled';
+
+      if (closest && !closest.started) {
+        timingMessage = `Epoch Begins in ${closest.labelUntilStart}`;
+        longTimingMessage = `Epoch ${currentEpochNumber} Begins in ${closest.labelUntilStart}`;
+      }
+      if (closest && closest.started) {
+        timingMessage = `Epoch ends in ${closest.labelUntilEnd}`;
+        longTimingMessage = `Epoch ${currentEpochNumber} Ends in ${closest.labelUntilEnd}`;
+      }
+
       return {
         epochs,
         pastEpochs,
@@ -412,116 +319,58 @@ export const rCircleEpochsStatus = selectorFamily<
         nextEpoch,
         futureEpochs,
         previousEpochEndedOn,
+        epochIsActive: !!currentEpoch,
+        timingMessage,
+        longTimingMessage,
       };
     },
 });
-export const useCircleEpochsStatus = (id: number) =>
-  useRecoilValue(rCircleEpochsStatus(id));
+
+export const rCircleNominees = selectorFamily({
+  key: 'rCircleNominees',
+  get:
+    (circleId: number) =>
+    ({ get }) =>
+      iti(get(rNomineesMap).values())
+        .filter(n => n.circle_id === circleId)
+        .sort(({ expiryDate: a }, { expiryDate: b }) => a.diff(b).milliseconds)
+        .toArray(),
+});
+
+type ExtractRecoilType<P> = P extends (a: any) => RecoilValueReadOnly<infer T>
+  ? T
+  : never;
+
+export interface ICircleState {
+  circleId: number;
+  circle: ICircle;
+  myUser: IMyUser;
+  impersonate: boolean;
+  users: IUser[];
+  usersNotMe: IUser[];
+  usersWithDeleted: IUser[];
+  circleEpochsStatus: ExtractRecoilType<typeof rCircleEpochsStatus>;
+  activeNominees: INominee[];
+}
+
+export const useCircles = () => useRecoilValue(rCirclesState);
+export const useMyAddress = () => useRecoilValue(rMyAddress);
+export const useMyProfile = () => useRecoilValue(rMyProfile);
+export const useWalletAuth = () => useRecoilValue(rWalletAuth);
+export const useSelectedCircleId = () => useRecoilValue(rSelectedCircleId);
+export const useCircle = (id: number) => useRecoilValue(rCircleState(id));
+
+export const useSelectedCircle = () =>
+  useRecoilValue(rCircleState(useSelectedCircleId()));
+
+export const useSelectedCircleLoadable = () =>
+  useRecoilValueLoadable(rCircleState(useSelectedCircleId()));
+
 export const useSelectedCircleEpochsStatus = () =>
-  useRecoilValue(rCircleEpochsStatus(useSelectedCircleId() ?? -1));
+  useEpochsStatus(useSelectedCircleId());
 
-export const rSelectedCircle = selector<ICircle | undefined>({
-  key: 'rSelectedCircle',
-  get: async ({ get }: IRecoilGetParams) =>
-    get(rCirclesMap).get(get(rSelectedCircleId) ?? -1),
-});
-export const useSelectedCircle = () => useRecoilValue(rSelectedCircle);
+export const useProfile = (address: string) =>
+  useRecoilValue(rProfile(address));
 
-export const rAvailableTeammates = selector<IUser[]>({
-  key: 'rAvailableTeammates',
-  get: ({ get }: IRecoilGetParams) => {
-    const selectedCircleId = get(rSelectedCircleId);
-    const selectedMyUser = get(rSelectedMyUser);
-    const usersMap = get(rUsersMap);
-    return iti(usersMap.values())
-      .filter(
-        u =>
-          !u.deleted_at &&
-          u.id !== selectedMyUser?.id &&
-          u.circle_id === selectedCircleId
-      )
-      .toArray();
-  },
-});
-export const useAvailableTeammates = () => useRecoilValue(rAvailableTeammates);
-
-export const rSelectedCircleUsersWithDeleted = selector<IUser[]>({
-  key: 'rSelectedCircleUsersWithDeleted',
-  get: ({ get }: IRecoilGetParams) => {
-    const selectedCircleId = get(rSelectedCircleId);
-    const usersMap = get(rUsersMap);
-    return iti(usersMap.values())
-      .filter(u => u.circle_id === selectedCircleId)
-      .toArray();
-  },
-});
-export const useSelectedCircleUsersWithDeleted = () =>
-  useRecoilValue(rSelectedCircleUsersWithDeleted);
-
-export const rSelectedCircleUsers = selector<IUser[]>({
-  key: 'rSelectedCircleUsers',
-  get: ({ get }: IRecoilGetParams) => {
-    const selectedCircleId = get(rSelectedCircleId);
-    return iti(get(rUsersMap).values())
-      .filter(u => !u.deleted_at && u.circle_id === selectedCircleId)
-      .toArray();
-  },
-});
-export const useSelectedCircleUsers = () =>
-  useRecoilValue(rSelectedCircleUsers);
-
-export const rGiftsFor = selectorFamily<ITokenGift[], number>({
-  key: 'rGiftsFor',
-  get:
-    (userId: number) =>
-    ({ get }: IRecoilGetParams) =>
-      get(rGifts).filter(g => g.recipient_id === userId),
-});
-export const useGiftsFor = (userId: number) =>
-  useRecoilValue(rGiftsFor(userId));
-
-export const rGiftsFrom = selectorFamily<ITokenGift[], number>({
-  key: 'rGiftsFrom',
-  get:
-    (userId: number) =>
-    ({ get }: IRecoilGetParams) =>
-      get(rGifts).filter(g => g.sender_id === userId),
-});
-export const useGiftsFrom = (userId: number) =>
-  useRecoilValue(rGiftsFrom(userId));
-
-export const rUserGifts = selectorFamily<
-  {
-    fromUser: ITokenGift[];
-    forUser: ITokenGift[];
-    fromUserByEpoch: Map<number, ITokenGift[]>;
-    forUserByEpoch: Map<number, ITokenGift[]>;
-    totalReceivedByEpoch: Map<number, number>;
-  },
-  number
->({
-  key: 'rUserGifts',
-  get:
-    (userId: number) =>
-    ({ get }: IRecoilGetParams) => {
-      const giftsFrom = get(rGiftsFrom(userId));
-      const giftsFor = get(rGiftsFor(userId));
-      const fromUserByEpoch = iti(giftsFrom).toGroups(g => g.epoch_id);
-      const forUserByEpoch = iti(giftsFor).toGroups(g => g.epoch_id);
-      const totalReceivedByEpoch = new Map(
-        iti(forUserByEpoch.entries()).map(([epochId, arr]) => [
-          epochId,
-          iti(arr.map(g => g.tokens)).sum() ?? 0,
-        ])
-      );
-      return {
-        fromUser: giftsFrom,
-        forUser: giftsFor,
-        fromUserByEpoch,
-        forUserByEpoch,
-        totalReceivedByEpoch,
-      };
-    },
-});
-export const useUserGifts = (userId: number) =>
-  useRecoilValue(rUserGifts(userId));
+export const useEpochsStatus = (circleId: number) =>
+  useRecoilValue(rCircleEpochsStatus(circleId));

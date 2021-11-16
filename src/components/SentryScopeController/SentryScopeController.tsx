@@ -2,8 +2,8 @@ import React, { useEffect } from 'react';
 
 import * as Sentry from '@sentry/browser';
 
-import { useCircle, useMe, useSelectedAllocation } from 'hooks';
-import { useConnectorName } from 'recoilState';
+import { useSelectedAllocation } from 'hooks';
+import { useWalletAuth, useMyProfile, useSelectedCircle } from 'recoilState';
 
 const AllocationScope = () => {
   const { localTeammatesChanged, localGiftsChanged, tokenRemaining } =
@@ -28,13 +28,14 @@ const AllocationScope = () => {
 };
 
 export const SentryScopeController = () => {
-  const { myCircles, selectedMyUser, hasAdminView } = useMe();
-  const { selectedCircleId, selectedCircle } = useCircle();
-  const connectorName = useConnectorName();
+  const { hasAdminView, myUsers } = useMyProfile();
+  const { myUser: selectedMyUser, circle: selectedCircle } =
+    useSelectedCircle();
+  const connectorName = useWalletAuth().connectorName;
 
   useEffect(() => {
     Sentry.configureScope(scope => {
-      scope.setTag('selected_circle_id', selectedCircleId);
+      scope.setTag('selected_circle_id', selectedCircle.id);
       scope.setTag(
         'selected_circle',
         `${selectedCircle?.protocol?.name}-${selectedCircle?.name}`
@@ -48,16 +49,9 @@ export const SentryScopeController = () => {
         'selected_circle_non_receiver',
         selectedMyUser?.non_receiver
       );
-      scope.setTag('number_circles_member_of', myCircles.length);
+      scope.setTag('number_circles_member_of', myUsers.length);
     });
-  }, [
-    selectedCircleId,
-    selectedCircle,
-    connectorName,
-    hasAdminView,
-    selectedMyUser,
-    myCircles,
-  ]);
+  }, [selectedCircle, connectorName, hasAdminView, selectedMyUser, myUsers]);
 
   if (selectedMyUser) {
     return <AllocationScope />;

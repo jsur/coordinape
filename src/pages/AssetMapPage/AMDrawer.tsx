@@ -15,6 +15,7 @@ import {
   useMapMeasures,
   useSetAmSearch,
   useTriggerMode,
+  useSelectedCircle,
 } from 'recoilState';
 
 import AMProfileCard from './AMProfileCard';
@@ -82,6 +83,7 @@ export const AMDrawer = () => {
   const [open, setOpen] = useState<boolean>(true);
   const [showRank, setShowRank] = useState<boolean>(false);
 
+  const { circle } = useSelectedCircle();
   const setSearch = useSetAmSearch();
   const metric = useMapMetric();
   const rawProfiles = useMapResults();
@@ -145,6 +147,7 @@ export const AMDrawer = () => {
             key={profile.id}
             profile={profile}
             summarize={showRank}
+            circle={circle}
           />
         ))}
       </div>
